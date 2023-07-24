@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -11,6 +12,7 @@ import (
 
 func main() {
 	e := echo.New()
+	e.HTTPErrorHandler = httpErrorHandler
 	ex := NewExchange()
 
 	e.GET("/book/:market", ex.handleGetBook)
@@ -18,6 +20,10 @@ func main() {
 	e.DELETE("/order/:id", ex.handleCancelOrder)
 
 	e.Start(":3000")
+}
+
+func httpErrorHandler(err error, c echo.Context) {
+	fmt.Println(err)
 }
 
 type OrderType string
@@ -68,56 +74,6 @@ type PlaceOrderRequest struct {
 	Market Market
 }
 
-func (ex *Exchange) handlePlaceOrder(c echo.Context) error {
-	var placeOrderData PlaceOrderRequest
-	if err := json.NewDecoder(c.Request().Body).Decode(&placeOrderData); err != nil {
-		return err
-	}
-
-	market := Market(placeOrderData.Market)
-	ob := ex.orderbooks[market]
-	order := orderbook.NewOrder(placeOrderData.Bid, placeOrderData.Size)
-
-	if placeOrderData.Type == LimitOrder {
-		ob.PlaceLimitOrder(placeOrderData.Price, order)
-		return c.JSON(200, map[string]any{"msg": "order placed"})
-	}
-
-	if placeOrderData.Type == MarketOrder {
-		matches := ob.PlaceMarketOrder(order)
-		return c.JSON(200, map[string]any{"msg": "order placed", "matches": len(matches)})
-	}
-
-	return c.JSON(http.StatusBadRequest, "type is invalid")
-}
-
-func (ex *Exchange) handleCancelOrder(c echo.Context) error {
-	idStr := c.Param("id")
-	id, _ := strconv.Atoi(idStr)
-
-	ob := ex.orderbooks[MarketETH]
-
-	for _, limit := range ob.Asks() {
-		for _, order := range limit.Orders {
-			if order.ID == int64(id) {
-				ob.CancelOrder(order)
-				return c.JSON(http.StatusOK, map[string]any{"msg": "order canceled"})
-			}
-		}
-	}
-
-	for _, limit := range ob.Bids() {
-		for _, order := range limit.Orders {
-			if order.ID == int64(id) {
-				ob.CancelOrder(order)
-				return c.JSON(http.StatusOK, map[string]any{"msg": "order canceled"})
-			}
-		}
-	}
-
-	return c.JSON(http.StatusOK, map[string]any{"msg": "order not canceled"})
-}
-
 func (ex *Exchange) handleGetBook(c echo.Context) error {
 	market := Market(c.Param("market"))
 	ob, ok := ex.orderbooks[market]
@@ -148,6 +104,7 @@ func (ex *Exchange) handleGetBook(c echo.Context) error {
 	for _, limit := range ob.Bids() {
 		for _, ord := range limit.Orders {
 			o := Order{
+				ID:        ord.ID,
 				Price:     limit.Price,
 				Size:      ord.Size,
 				Bid:       ord.Bid,
@@ -158,4 +115,66 @@ func (ex *Exchange) handleGetBook(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, orderBookData)
+}
+
+type MatchedOrder struct {
+	ID    int64
+	Size  float64
+	Price float64
+}
+
+func (ex *Exchange) handlePlaceOrder(c echo.Context) error {
+	var placeOrderData PlaceOrderRequest
+	if err := json.NewDecoder(c.Request().Body).Decode(&placeOrderData); err != nil {
+		return err
+	}
+
+	market := Market(placeOrderData.Market)
+	ob := ex.orderbooks[market]
+	order := orderbook.NewOrder(placeOrderData.Bid, placeOrderData.Size)
+
+	if placeOrderData.Type == LimitOrder {
+		ob.PlaceLimitOrder(placeOrderData.Price, order)
+		return c.JSON(200, map[string]any{"msg": "order placed"})
+	}
+
+	if placeOrderData.Type == MarketOrder {
+		matches := ob.PlaceMarketOrder(order)
+		matchesOrder := make([]*MatchedOrder, len(matches))
+
+		isBid := order.Bid
+
+		for i := 0; i < len(matches); i++ {
+			var id int64
+			if isBid {
+				id = matches[i].Ask.ID
+			} else {
+				id = matches[i].Bid.ID
+			}
+			matchesOrder[i] = &MatchedOrder{
+				ID:    id,
+				Size:  matches[i].SizeFilled,
+				Price: matches[i].Price,
+			}
+		}
+
+		return c.JSON(200, map[string]any{"msg": "order placed", "matches": matchesOrder})
+	}
+
+	return c.JSON(http.StatusBadRequest, "type is invalid")
+}
+
+func (ex *Exchange) handleCancelOrder(c echo.Context) error {
+	idStr := c.Param("id")
+	id, _ := strconv.Atoi(idStr)
+
+	ob := ex.orderbooks[MarketETH]
+
+	order, ok := ob.Orders[int64(id)]
+	if !ok {
+		return c.JSON(http.StatusBadRequest, map[string]any{"msg": "order not found!"})
+	}
+	ob.CancelOrder(order)
+
+	return c.JSON(http.StatusOK, map[string]any{"msg": "order canceled"})
 }
