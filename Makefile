@@ -6,3 +6,9 @@ run: build
 
 test:
 	go test -v ./...
+
+instal-ganache:
+	npm install ganache --global
+
+run-ganache:
+	ganache -d
