@@ -5,6 +5,7 @@ go 1.19
 require (
 	github.com/ethereum/go-ethereum v1.12.0
 	github.com/labstack/echo/v4 v4.11.1
+	github.com/sirupsen/logrus v1.9.3
 )
 
 require (

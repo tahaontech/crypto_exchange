@@ -1,66 +1,60 @@
 package main
 
 import (
-	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/tahaontech/crypto_exchange/client"
+	"github.com/tahaontech/crypto_exchange/mm"
 	"github.com/tahaontech/crypto_exchange/server"
 )
 
 func main() {
 	go server.StartServer()
-
 	time.Sleep(1 * time.Second)
 
 	c := client.NewClient()
 
-	bidParams := &client.PlaceOrderParams{
-		UserID: 8,
-		Bid:    true,
-		Size:   1_000_000,
-		Price:  10_000,
+	cfg := mm.Config{
+		UserID:         8,
+		OrderSize:      10,
+		MinSpread:      20,
+		MakeInterval:   1 * time.Second,
+		SeedOffset:     40,
+		ExchangeClient: c,
+		PriceOffset:    10,
 	}
+	maker := mm.NewMakerMaker(cfg)
 
-	go func() {
-		for {
-			resp, err := c.PlaceLimitOrder(bidParams)
-			if err != nil {
-				panic(err)
-			}
+	maker.Start()
 
-			fmt.Printf("bid order id => %d\n", resp.OrderID)
-
-			if err := c.CancelOrder(resp.OrderID); err != nil {
-				panic(err)
-			}
-
-			time.Sleep(1 * time.Second)
-		}
-	}()
-
-	askParams := &client.PlaceOrderParams{
-		UserID: 8,
-		Bid:    false,
-		Size:   1_000,
-		Price:  8_000,
-	}
-	go func() {
-		for {
-			resp, err := c.PlaceLimitOrder(askParams)
-			if err != nil {
-				panic(err)
-			}
-
-			fmt.Printf("ask order id => %d\n", resp.OrderID)
-
-			if err := c.CancelOrder(resp.OrderID); err != nil {
-				panic(err)
-			}
-
-			time.Sleep(1 * time.Second)
-		}
-	}()
+	time.Sleep(2 * time.Second)
+	go marketOrderPlacer(c)
 
 	select {}
+}
+
+func marketOrderPlacer(c *client.Client) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+
+	for {
+		randint := rand.Intn(10)
+		bid := true
+		if randint < 7 {
+			bid = false
+		}
+
+		order := client.PlaceOrderParams{
+			UserID: 7,
+			Bid:    bid,
+			Size:   1,
+		}
+
+		_, err := c.PlaceMarketOrder(&order)
+		if err != nil {
+			panic(err)
+		}
+
+		<-ticker.C
+	}
 }

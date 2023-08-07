@@ -6,7 +6,16 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
+
+type Trade struct {
+	Price     float64
+	Size      float64
+	Bid       bool
+	Timestamp int64
+}
 
 type Match struct {
 	Ask        *Order
@@ -32,8 +41,8 @@ func (o Orders) Less(i, j int) bool { return o[i].Timestamp < o[j].Timestamp }
 
 func NewOrder(bid bool, size float64, userID int64) *Order {
 	return &Order{
-		ID:        int64(rand.Intn(1000000000)),
 		UserID:    userID,
+		ID:        int64(rand.Intn(10000000)),
 		Size:      size,
 		Bid:       bid,
 		Timestamp: time.Now().UnixNano(),
@@ -41,7 +50,14 @@ func NewOrder(bid bool, size float64, userID int64) *Order {
 }
 
 func (o *Order) String() string {
-	return fmt.Sprintf("[size: %.2f]", o.Size)
+	return fmt.Sprintf("[size: %.2f] | [id: %d]", o.Size, o.ID)
+}
+
+func (o *Order) Type() string {
+	if o.Bid {
+		return "BID"
+	}
+	return "ASK"
 }
 
 func (o *Order) IsFilled() bool {
@@ -75,10 +91,6 @@ func NewLimit(price float64) *Limit {
 	}
 }
 
-func (l *Limit) String() string {
-	return fmt.Sprintf("[price: %.2f | volume: %.2f]", l.Price, l.TotalVolume)
-}
-
 func (l *Limit) AddOrder(o *Order) {
 	o.Limit = l
 	l.Orders = append(l.Orders, o)
@@ -101,27 +113,27 @@ func (l *Limit) DeleteOrder(o *Order) {
 
 func (l *Limit) Fill(o *Order) []Match {
 	var (
-		matches       = []Match{}
-		orderToDelete = []*Order{}
+		matches        []Match
+		ordersToDelete []*Order
 	)
 
 	for _, order := range l.Orders {
+		if o.IsFilled() {
+			break
+		}
+
 		match := l.fillOrder(order, o)
 		matches = append(matches, match)
 
 		l.TotalVolume -= match.SizeFilled
 
 		if order.IsFilled() {
-			orderToDelete = append(orderToDelete, order)
-		}
-
-		if o.IsFilled() {
-			break
+			ordersToDelete = append(ordersToDelete, order)
 		}
 	}
 
-	for _, do := range orderToDelete {
-		l.DeleteOrder(do)
+	for _, order := range ordersToDelete {
+		l.DeleteOrder(order)
 	}
 
 	return matches
@@ -142,7 +154,7 @@ func (l *Limit) fillOrder(a, b *Order) Match {
 		ask = a
 	}
 
-	if a.Size > b.Size {
+	if a.Size >= b.Size {
 		a.Size -= b.Size
 		sizeFilled = b.Size
 		b.Size = 0.0
@@ -164,6 +176,8 @@ type Orderbook struct {
 	asks []*Limit
 	bids []*Limit
 
+	Trades []*Trade
+
 	mu        sync.RWMutex
 	AskLimits map[float64]*Limit
 	BidLimits map[float64]*Limit
@@ -174,6 +188,7 @@ func NewOrderbook() *Orderbook {
 	return &Orderbook{
 		asks:      []*Limit{},
 		bids:      []*Limit{},
+		Trades:    []*Trade{},
 		AskLimits: make(map[float64]*Limit),
 		BidLimits: make(map[float64]*Limit),
 		Orders:    make(map[int64]*Order),
@@ -181,11 +196,14 @@ func NewOrderbook() *Orderbook {
 }
 
 func (ob *Orderbook) PlaceMarketOrder(o *Order) []Match {
+	ob.mu.Lock()
+	defer ob.mu.Unlock()
+
 	matches := []Match{}
 
 	if o.Bid {
 		if o.Size > ob.AskTotalVolume() {
-			panic(fmt.Errorf("not enough volume [size: %.2f] for order [size: %.2f]", ob.AskTotalVolume(), o.Size))
+			panic(fmt.Errorf("not enough volume [size: %.2f] for market order [size: %.2f]", ob.AskTotalVolume(), o.Size))
 		}
 
 		for _, limit := range ob.Asks() {
@@ -198,7 +216,7 @@ func (ob *Orderbook) PlaceMarketOrder(o *Order) []Match {
 		}
 	} else {
 		if o.Size > ob.BidTotalVolume() {
-			panic(fmt.Errorf("not enough volume [size: %.2f] for order [size: %.2f]", ob.AskTotalVolume(), o.Size))
+			panic(fmt.Errorf("not enough volume [size: %.2f] for market order [size: %.2f]", ob.BidTotalVolume(), o.Size))
 		}
 
 		for _, limit := range ob.Bids() {
@@ -210,6 +228,20 @@ func (ob *Orderbook) PlaceMarketOrder(o *Order) []Match {
 			}
 		}
 	}
+
+	for _, match := range matches {
+		trade := &Trade{
+			Price:     match.Price,
+			Size:      match.SizeFilled,
+			Timestamp: time.Now().UnixNano(),
+			Bid:       o.Bid,
+		}
+		ob.Trades = append(ob.Trades, trade)
+	}
+
+	logrus.WithFields(logrus.Fields{
+		"currentPrice": ob.Trades[len(ob.Trades)-1].Price,
+	}).Info()
 
 	return matches
 }
@@ -238,6 +270,13 @@ func (ob *Orderbook) PlaceLimitOrder(price float64, o *Order) {
 		}
 	}
 
+	logrus.WithFields(logrus.Fields{
+		"price":  limit.Price,
+		"type":   o.Type(),
+		"size":   o.Size,
+		"userID": o.UserID,
+	}).Info("new limit order")
+
 	ob.Orders[o.ID] = o
 	limit.AddOrder(o)
 }
@@ -260,12 +299,18 @@ func (ob *Orderbook) clearLimit(bid bool, l *Limit) {
 			}
 		}
 	}
+
+	fmt.Printf("clearing limit price level [%.2f]\n", l.Price)
 }
 
 func (ob *Orderbook) CancelOrder(o *Order) {
 	limit := o.Limit
 	limit.DeleteOrder(o)
 	delete(ob.Orders, o.ID)
+
+	if len(limit.Orders) == 0 {
+		ob.clearLimit(o.Bid, limit)
+	}
 }
 
 func (ob *Orderbook) BidTotalVolume() float64 {

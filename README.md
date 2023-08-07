@@ -1,5 +1,21 @@
 # Crypto Exchange Backend: Powering Secure and Efficient Digital Asset Trading**
 
+## Run the app
+
+for running the app use following command to run ganache server
+
+```shell
+make run-ganache
+```
+
+then run following command to run the app:
+
+```shell
+make run
+```
+
+## app description
+
 The Crypto Exchange Backend is the robust and sophisticated engine that drives the seamless operation of a cutting-edge cryptocurrency exchange platform. Developed with state-of-the-art technology and security measures, this backend serves as the foundation for a user-friendly, reliable, and high-performance trading experience for cryptocurrency enthusiasts and investors alike.
 
 **1. Security and Reliability:**
